@@ -1,4 +1,4 @@
-use csv::{ReaderBuilder, Trim};
+use csv::{ReaderBuilder, Trim, Reader};
 use rust_decimal::Decimal;
 use serde::{ser::SerializeStruct, Deserialize, Serialize, Serializer};
 use std::collections::HashMap;
@@ -6,6 +6,7 @@ use std::env;
 use std::error::Error;
 use std::io;
 use std::process;
+use std::fs::File;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -32,6 +33,13 @@ struct Tx {
 
     #[serde(default)]
     is_disputed: bool,
+}
+
+impl Tx {
+    fn is_disputable(&self) -> bool {
+        // assumption: only allow disputes on deposits
+        self.action == TxAction::DEPOSIT
+    }
 }
 
 #[derive(Debug)]
@@ -114,14 +122,6 @@ impl Account {
 type AccountMap = HashMap<u16, Account>;
 type TxMap = HashMap<u32, Tx>;
 
-// support collect to map of transactions from an iterator over Tx
-// ref:: https://doc.rust-lang.org/std/iter/trait.FromIterator.html
-impl FromIterator<Tx> for TxMap {
-    fn from_iter<I: IntoIterator<Item = Tx>>(iter: I) -> Self {
-        iter.into_iter().map(|tx| (tx.tx, tx)).collect::<TxMap>()
-    }
-}
-
 fn ensure_account(client: u16, accounts: &mut AccountMap) -> () {
     if !accounts.contains_key(&client) {
         accounts.insert(
@@ -136,7 +136,7 @@ fn ensure_account(client: u16, accounts: &mut AccountMap) -> () {
     }
 }
 
-fn handle_dispute_action(account: &mut Account, disputed_tx: &mut Tx, action: TxAction) {
+fn handle_dispute_action(account: &mut Account, disputed_tx: &mut Tx, action: &TxAction) {
     match action {
         TxAction::DISPUTE => {
             // assumption: disallow disputes of transactions already under dispute
@@ -164,7 +164,7 @@ fn handle_dispute_action(account: &mut Account, disputed_tx: &mut Tx, action: Tx
 }
 
 fn process_tx(
-    tx: Tx,
+    tx: &mut Tx,
     disputable_txs: &mut TxMap,
     accounts: &mut AccountMap,
 ) -> Result<(), Box<dyn Error>> {
@@ -176,10 +176,10 @@ fn process_tx(
             TxAction::WITHDRAWAL => account.withdraw(tx.amount),
             TxAction::DISPUTE | TxAction::RESOLVE | TxAction::CHARGEBACK => {
                 if let Some(disputed_tx) = disputable_txs.get_mut(&tx.tx) {
-                    // assumption: only allow disputes on deposits
+
                     // assumption: disallow client x to dispute tx of client y, where x != y
-                    if disputed_tx.action == TxAction::DEPOSIT && disputed_tx.client == tx.client {
-                        handle_dispute_action(account, disputed_tx, tx.action);
+                    if disputed_tx.is_disputable() && disputed_tx.client == tx.client {
+                        handle_dispute_action(account, disputed_tx, &tx.action);
                     }
                 }
             }
@@ -190,13 +190,20 @@ fn process_tx(
 }
 
 fn balance_accounts(
-    ordered_txs: Vec<Tx>,
-    disputable_txs: &mut TxMap,
+    mut tx_reader: Reader<File>
 ) -> Result<AccountMap, Box<dyn Error>> {
     let mut accounts: AccountMap = AccountMap::new();
+    let mut disputable_txs = TxMap::new();
 
-    for tx in ordered_txs.into_iter() {
-        process_tx(tx, disputable_txs, &mut accounts)?;
+    let tx_iter = tx_reader.deserialize::<Tx>();
+
+    for tx_result in tx_iter {
+        let mut tx = tx_result?;
+        process_tx(&mut tx, &mut disputable_txs, &mut accounts)?;
+
+        if tx.is_disputable() {
+            disputable_txs.insert(tx.tx, tx);
+        }
     }
 
     Ok(accounts)
@@ -213,23 +220,13 @@ fn write_accounts(accounts: AccountMap) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn read_txs(path: &str) -> Result<Vec<Tx>, csv::Error> {
-    // use flexible reader to accept csv rows like "dispute,1,2" and "dispute,1,2,"
-    let mut reader = ReaderBuilder::new()
+fn safe_run(input_arg: &str) -> Result<(), Box<dyn Error>> {
+    let tx_reader = ReaderBuilder::new()
         .flexible(true)
         .trim(Trim::All)
-        .from_path(path)?;
-    reader.deserialize::<Tx>().collect()
-}
+        .from_path(input_arg)?;
 
-fn safe_run(input_arg: &str) -> Result<(), Box<dyn Error>> {
-    let ordered_txs = read_txs(input_arg)?;
-    let mut disputable_txs: TxMap = ordered_txs
-        .iter()
-        .filter(|tx| tx.action == TxAction::DEPOSIT)
-        .cloned()
-        .collect();
-    let accounts = balance_accounts(ordered_txs, &mut disputable_txs)?;
+    let accounts = balance_accounts(tx_reader)?;
     write_accounts(accounts)?;
 
     Ok(())
