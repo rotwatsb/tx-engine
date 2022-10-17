@@ -1,0 +1,27 @@
+type, client, tx, amount
+deposit, 1, 1, 10
+withdrawal, 1, 2,  1
+deposit, 2, 3, 10
+withdrawal, 2, 4,  2
+deposit, 3, 5, 10
+withdrawal, 3, 6,  3
+deposit, 4, 7, 10
+withdrawal, 4, 8,  4
+deposit, 5, 9, 10
+withdrawal, 5, 10,  5
+deposit, 6, 11, 10
+withdrawal, 6, 12,  6
+deposit, 7, 13, 10
+withdrawal, 7, 14,  7
+deposit, 8, 15, 10
+withdrawal, 8, 16,  8
+deposit, 9, 17, 10
+withdrawal, 9, 18,  9
+deposit, 10, 19, 10
+withdrawal, 10, 20,  10
+dispute, 1, 1
+dispute, 1, 1
+dispute, 2, 3
+dispute, 2, 3
+resolve, 1, 1
+chargeback, 2, 3
