@@ -93,29 +93,23 @@ impl Account {
     }
 
     fn hold(&mut self, amount: TxAmount) {
-        if !self.is_locked {
-            if let Some(value) = amount {
-                self.available -= value;
-                self.held += value;
-            }
+        if let Some(value) = amount {
+            self.available -= value;
+            self.held += value;
         }
     }
 
     fn release(&mut self, amount: TxAmount) {
-        if !self.is_locked {
-            if let Some(value) = amount {
-                self.available += value;
-                self.held -= value;
-            }
+        if let Some(value) = amount {
+            self.available += value;
+            self.held -= value;
         }
     }
 
     fn chargeback(&mut self, amount: TxAmount) {
-        if !self.is_locked {
-            if let Some(value) = amount {
-                self.held -= value;
-                self.is_locked = true;
-            }
+        if let Some(value) = amount {
+            self.held -= value;
+            self.is_locked = true;
         }
     }
 }
@@ -140,21 +134,21 @@ fn ensure_account(client: u16, accounts: &mut AccountMap) -> () {
 fn handle_dispute_action(account: &mut Account, disputed_tx: &mut Tx, action: &TxAction) {
     match action {
         TxAction::DISPUTE => {
-            // assumption: disallow disputes of transactions already under dispute
+            // assumption: disputes of transactions already under dispute can be ignored
             if !disputed_tx.is_disputed {
                 disputed_tx.is_disputed = true;
                 account.hold(disputed_tx.amount);
             }
         }
         TxAction::RESOLVE => {
-            // assumption: cannot resolve a transaction that isn't under dispute
+            // assumption: a transaction that isn't under dispute cannot be resolved
             if disputed_tx.is_disputed {
                 disputed_tx.is_disputed = false;
                 account.release(disputed_tx.amount);
             }
         }
         TxAction::CHARGEBACK => {
-            // assumption: cannot chargeback a transaction that isn't under dispute
+            // assumption: a transaction that isn't under dispute cannot be charged back
             if disputed_tx.is_disputed {
                 disputed_tx.is_disputed = false;
                 account.chargeback(disputed_tx.amount);

@@ -26,3 +26,4 @@ There is a bloated unit test which makes various assertions after processing eac
 
 1. Disputes can only be made on `deposit`-type transactions.
 2. `dispute`, `resolve` and `chargeback` transactions are only valid if processed with the same client as that of the disputed `deposit` transaction.
+3. When an account becomes `locked` after a `chargeback` transaction, disallow further `deposit` and `withdrawal` transactions
