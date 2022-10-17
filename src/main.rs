@@ -1,12 +1,13 @@
-use csv::{ReaderBuilder, Trim, Reader};
+use csv::{Reader, ReaderBuilder, Trim};
 use rust_decimal::Decimal;
+use rust_decimal_macros::dec;
 use serde::{ser::SerializeStruct, Deserialize, Serialize, Serializer};
 use std::collections::HashMap;
 use std::env;
 use std::error::Error;
+use std::fs::File;
 use std::io;
 use std::process;
-use std::fs::File;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -128,8 +129,8 @@ fn ensure_account(client: u16, accounts: &mut AccountMap) -> () {
             client,
             Account {
                 client: client,
-                available: Decimal::new(0, 0),
-                held: Decimal::new(0, 0),
+                available: dec!(0),
+                held: dec!(0),
                 is_locked: false,
             },
         );
@@ -176,7 +177,6 @@ fn process_tx(
             TxAction::WITHDRAWAL => account.withdraw(tx.amount),
             TxAction::DISPUTE | TxAction::RESOLVE | TxAction::CHARGEBACK => {
                 if let Some(disputed_tx) = disputable_txs.get_mut(&tx.tx) {
-
                     // assumption: disallow client x to dispute tx of client y, where x != y
                     if disputed_tx.is_disputable() && disputed_tx.client == tx.client {
                         handle_dispute_action(account, disputed_tx, &tx.action);
@@ -189,9 +189,7 @@ fn process_tx(
     Ok(())
 }
 
-fn balance_accounts(
-    mut tx_reader: Reader<File>
-) -> Result<AccountMap, Box<dyn Error>> {
+fn balance_accounts(mut tx_reader: Reader<File>) -> Result<AccountMap, Box<dyn Error>> {
     let mut accounts: AccountMap = AccountMap::new();
     let mut disputable_txs = TxMap::new();
 
@@ -220,11 +218,11 @@ fn write_accounts(accounts: AccountMap) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn safe_run(input_arg: &str) -> Result<(), Box<dyn Error>> {
+fn safe_run(path: &str) -> Result<(), Box<dyn Error>> {
     let tx_reader = ReaderBuilder::new()
         .flexible(true)
         .trim(Trim::All)
-        .from_path(input_arg)?;
+        .from_path(path)?;
 
     let accounts = balance_accounts(tx_reader)?;
     write_accounts(accounts)?;
@@ -235,13 +233,113 @@ fn safe_run(input_arg: &str) -> Result<(), Box<dyn Error>> {
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    let input_arg = &args[1];
+    let path = &args[1];
 
-    match safe_run(input_arg) {
+    match safe_run(path) {
         Ok(()) => (),
         Err(e) => {
             dbg!(e);
             process::exit(1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_process_tx() -> Result<(), Box<dyn Error>> {
+        let mut accounts: AccountMap = AccountMap::new();
+        let mut disputable_txs = TxMap::new();
+
+        let mut deposit = Tx {
+            action: TxAction::DEPOSIT,
+            client: 1,
+            tx: 1,
+            amount: Some(dec!(1)),
+            is_disputed: false,
+        };
+
+        process_tx(&mut deposit, &mut disputable_txs, &mut accounts)?;
+        disputable_txs.insert(deposit.tx, deposit);
+
+        let account = accounts.get(&1).unwrap();
+        assert_eq!(account.total(), dec!(1));
+
+        let mut withdrawal = Tx {
+            action: TxAction::WITHDRAWAL,
+            client: 1,
+            tx: 2,
+            amount: Some(dec!(1)),
+            is_disputed: false,
+        };
+
+        process_tx(&mut withdrawal, &mut disputable_txs, &mut accounts)?;
+
+        let account = accounts.get(&1).unwrap();
+        assert_eq!(account.total(), dec!(0));
+
+        let mut dispute = Tx {
+            action: TxAction::DISPUTE,
+            client: 1,
+            tx: 1,
+            amount: None,
+            is_disputed: false,
+        };
+
+        process_tx(&mut dispute, &mut disputable_txs, &mut accounts)?;
+
+        let account = accounts.get(&1).unwrap();
+        assert_eq!(account.total(), dec!(0));
+        assert_eq!(account.available, dec!(-1));
+        assert_eq!(account.held, dec!(1));
+
+        let mut resolve = Tx {
+            action: TxAction::RESOLVE,
+            client: 1,
+            tx: 1,
+            amount: None,
+            is_disputed: false,
+        };
+
+        process_tx(&mut resolve, &mut disputable_txs, &mut accounts)?;
+
+        let account = accounts.get(&1).unwrap();
+        assert_eq!(account.total(), dec!(0));
+        assert_eq!(account.available, dec!(0));
+        assert_eq!(account.held, dec!(0));
+
+        let mut redispute = Tx {
+            action: TxAction::DISPUTE,
+            client: 1,
+            tx: 1,
+            amount: None,
+            is_disputed: false,
+        };
+
+        process_tx(&mut redispute, &mut disputable_txs, &mut accounts)?;
+
+        let account = accounts.get(&1).unwrap();
+        assert_eq!(account.total(), dec!(0));
+        assert_eq!(account.available, dec!(-1));
+        assert_eq!(account.held, dec!(1));
+
+        let mut chargeback = Tx {
+            action: TxAction::CHARGEBACK,
+            client: 1,
+            tx: 1,
+            amount: None,
+            is_disputed: false,
+        };
+
+        process_tx(&mut chargeback, &mut disputable_txs, &mut accounts)?;
+
+        let account = accounts.get(&1).unwrap();
+        assert_eq!(account.total(), dec!(-1));
+        assert_eq!(account.available, dec!(-1));
+        assert_eq!(account.held, dec!(0));
+
+        Ok(())
     }
 }
